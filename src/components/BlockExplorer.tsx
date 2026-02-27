@@ -37,11 +37,15 @@ export function BlockExplorer() {
       });
       setData(result);
     } catch (err) {
+      let message: string;
       if (err instanceof ApiError) {
-        setError(err.message);
+        message = err.message;
+      } else if (err instanceof Error && err.name === 'AbortError') {
+        message = 'Request timed out. Block scan can take 1–2 minutes; try again or reduce limit.';
       } else {
-        setError('An unexpected error occurred');
+        message = err instanceof Error ? err.message : String(err);
       }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -105,8 +109,11 @@ export function BlockExplorer() {
               </div>
             </div>
             <Button data-testid="scan-block-btn" type="submit" disabled={loading || !height}>
-              {loading ? 'Scanning...' : 'Scan Block'}
+              {loading ? 'Scanning block… (may take 1–2 min)' : 'Scan Block'}
             </Button>
+            <p className="text-xs text-muted-foreground">
+              First scan of a block can take 30–60 seconds. Ensure the backend is running (e.g. <code className="text-xs">./target/release/cltv-scan serve --request-delay-ms 0</code>).
+            </p>
           </form>
         </CardContent>
       </Card>
@@ -138,75 +145,90 @@ export function BlockExplorer() {
               <div className="text-sm text-muted-foreground">No transactions match the selected filter</div>
             ) : (
               <div className="space-y-2">
-                {data.transactions.map((tx: TxAnalysisResponse) => (
-                  <Collapsible key={tx.timelock.txid} open={expandedTxs.has(tx.timelock.txid)}>
-                    <Card>
-                      <CollapsibleTrigger
-                        data-testid="tx-row"
-                        className="w-full"
-                        onClick={() => toggleTx(tx.timelock.txid)}
-                      >
-                        <CardHeader>
-                          <div className="flex items-center justify-between">
-                            <div className="font-mono text-sm truncate">{tx.timelock.txid}</div>
-                            <div className="flex items-center gap-2 text-xs">
-                              {tx.alerts.length > 0 && (
-                                <span className="bg-red-100 text-red-800 px-2 py-1 rounded">
-                                  {tx.alerts.length} alerts
-                                </span>
-                              )}
-                              {tx.lightning.tx_type && (
-                                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                                  ⚡ {tx.lightning.tx_type}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </CardHeader>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <CardContent className="space-y-3 pt-0">
-                          <div className="border-t pt-3">
-                            <div className="text-sm font-semibold mb-2">Timelock Info</div>
-                            <div className="text-xs space-y-1">
-                              <div>nLocktime: {tx.timelock.nlocktime.human_readable}</div>
-                              {tx.timelock.sequences.length > 0 && (
-                                <div>Sequences: {tx.timelock.sequences.length} inputs</div>
-                              )}
-                              {tx.timelock.script_timelocks.length > 0 && (
-                                <div>Script Timelocks: {tx.timelock.script_timelocks.length}</div>
-                              )}
-                            </div>
-                          </div>
+                {data.transactions.map((tx: TxAnalysisResponse) => {
+                  // Backend returns inputs + cltv_timelocks/csv_timelocks; types may say sequences/script_timelocks
+                  const tl = tx.timelock as TxAnalysisResponse['timelock'] & {
+                    inputs?: unknown[];
+                    cltv_timelocks?: unknown[];
+                    csv_timelocks?: unknown[];
+                  };
+                  const sequences = tl.sequences ?? tl.inputs ?? [];
+                  const scriptTimelocks = tl.script_timelocks ?? [];
+                  const scriptCount =
+                    scriptTimelocks.length ||
+                    (tl.cltv_timelocks?.length ?? 0) + (tl.csv_timelocks?.length ?? 0);
+                  const alerts = tx.alerts ?? [];
 
-                          {tx.lightning.tx_type && (
+                  return (
+                    <Collapsible key={tx.timelock.txid} open={expandedTxs.has(tx.timelock.txid)}>
+                      <Card>
+                        <CollapsibleTrigger
+                          data-testid="tx-row"
+                          className="w-full"
+                          onClick={() => toggleTx(tx.timelock.txid)}
+                        >
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <div className="font-mono text-sm truncate">{tx.timelock.txid}</div>
+                              <div className="flex items-center gap-2 text-xs">
+                                {alerts.length > 0 && (
+                                  <span className="bg-red-100 text-red-800 px-2 py-1 rounded">
+                                    {alerts.length} alerts
+                                  </span>
+                                )}
+                                {tx.lightning?.tx_type && (
+                                  <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                                    ⚡ {tx.lightning.tx_type}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <CardContent className="space-y-3 pt-0">
                             <div className="border-t pt-3">
-                              <div className="text-sm font-semibold mb-2">Lightning</div>
+                              <div className="text-sm font-semibold mb-2">Timelock Info</div>
                               <div className="text-xs space-y-1">
-                                <div>Type: {tx.lightning.tx_type}</div>
-                                <div>Confidence: {tx.lightning.confidence}</div>
+                                <div>nLocktime: {tx.timelock.nlocktime?.human_readable ?? '—'}</div>
+                                {sequences.length > 0 && (
+                                  <div>Sequences: {sequences.length} inputs</div>
+                                )}
+                                {scriptCount > 0 && (
+                                  <div>Script Timelocks: {scriptCount}</div>
+                                )}
                               </div>
                             </div>
-                          )}
 
-                          {tx.alerts.length > 0 && (
-                            <div className="border-t pt-3">
-                              <div className="text-sm font-semibold mb-2">Alerts</div>
-                              <div className="space-y-1">
-                                {tx.alerts.map((alert) => (
-                                  <div key={alert.id} className="text-xs p-2 bg-red-50 rounded">
-                                    <div className="font-bold uppercase">{alert.severity}</div>
-                                    <div>{alert.description}</div>
-                                  </div>
-                                ))}
+                            {tx.lightning?.tx_type && (
+                              <div className="border-t pt-3">
+                                <div className="text-sm font-semibold mb-2">Lightning</div>
+                                <div className="text-xs space-y-1">
+                                  <div>Type: {tx.lightning.tx_type}</div>
+                                  <div>Confidence: {tx.lightning.confidence}</div>
+                                </div>
                               </div>
-                            </div>
-                          )}
-                        </CardContent>
-                      </CollapsibleContent>
-                    </Card>
-                  </Collapsible>
-                ))}
+                            )}
+
+                            {alerts.length > 0 && (
+                              <div className="border-t pt-3">
+                                <div className="text-sm font-semibold mb-2">Alerts</div>
+                                <div className="space-y-1">
+                                  {alerts.map((alert) => (
+                                    <div key={alert.id} className="text-xs p-2 bg-red-50 rounded">
+                                      <div className="font-bold uppercase">{alert.severity}</div>
+                                      <div>{alert.description}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </CardContent>
+                        </CollapsibleContent>
+                      </Card>
+                    </Collapsible>
+                  );
+                })}
               </div>
             )}
           </CardContent>
