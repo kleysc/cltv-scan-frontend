@@ -7,7 +7,8 @@ import type {
   LightningResponse,
 } from '@/types/api';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Use relative path when unset so Vite dev proxy (/api → localhost:3001) works
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
 
 class ApiError extends Error {
   constructor(
@@ -20,13 +21,20 @@ class ApiError extends Error {
   }
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+const DEFAULT_TIMEOUT_MS = 120_000; // 2 min for block/scan/lightning
+
+async function fetchJson<T>(url: string, options?: { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  const response = await fetch(url, { signal: controller.signal });
+  clearTimeout(timeoutId);
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
     throw new ApiError(
-      `HTTP ${response.status}: ${response.statusText}`,
+      text || `HTTP ${response.status}: ${response.statusText}`,
       response.status,
       text
     );
@@ -65,7 +73,7 @@ export const api = {
     const query = params.toString();
     const url = `${API_BASE_URL}/api/block/${height}${query ? `?${query}` : ''}`;
 
-    return fetchJson<BlockAnalysisResponse>(url);
+    return fetchJson<BlockAnalysisResponse>(url, { timeoutMs: 120_000 });
   },
 
   /**
