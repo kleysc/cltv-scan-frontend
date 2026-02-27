@@ -21,8 +21,8 @@ const VISIBLE_TABS = TABS.filter((t) => !t.hidden);
 
 const Index = () => {
   useSeoMeta({
-    title: 'cltv-scan — Bitcoin Timelock & Lightning Analysis',
-    description: 'Analyze Bitcoin transactions for timelocks, Lightning Network patterns, and security vulnerabilities.',
+    title: 'HTLC Sentinel — Bitcoin Timelock & Lightning Analysis',
+    description: 'Monitor and analyze Bitcoin transactions for timelocks, Lightning Network patterns, and security vulnerabilities.',
   });
 
   const [activeTab, setActiveTab] = useState<TabId>('tx-analyzer');
@@ -49,11 +49,11 @@ const Index = () => {
         <div className="max-w-[1200px] mx-auto px-6 py-3 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded bg-gradient-to-br from-primary to-blue-500 flex items-center justify-center shrink-0">
-              <span className="font-mono text-xs font-bold text-background">CT</span>
+              <span className="font-mono text-xs font-bold text-background">HS</span>
             </div>
             <div>
               <div className="font-mono font-bold text-sm tracking-wide text-foreground">
-                cltv-scan
+                HTLC Sentinel
               </div>
               <div className="font-mono text-[10px] text-muted-foreground tracking-wide">
                 Bitcoin Timelock Security Analyzer
