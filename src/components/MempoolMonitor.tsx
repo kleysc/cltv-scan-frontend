@@ -1,267 +1,280 @@
 import { useState, useEffect, useRef } from 'react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
 import type { MonitorEvent, AlertSeverity } from '@/types/api';
 
 type ConnectionStatus = 'disconnected' | 'connected' | 'error';
 
 interface MonitorEventDisplay extends MonitorEvent {
-  timestamp: number;
+  receivedAt: number;
 }
 
 const MAX_EVENTS = 200;
 
-export function MempoolMonitor() {
-  const [interval, setInterval] = useState('10');
+const SEVERITY_ROW: Record<AlertSeverity, string> = {
+  critical:      'rgba(239,68,68,0.07)',
+  warning:       'rgba(245,158,11,0.06)',
+  informational: 'rgba(59,130,246,0.06)',
+};
+
+const SEVERITY_BADGE_STYLE: Record<AlertSeverity, { bg: string; text: string }> = {
+  critical:      { bg: '#ef4444', text: '#fff' },
+  warning:       { bg: '#f59e0b', text: '#000' },
+  informational: { bg: '#3b82f6', text: '#fff' },
+};
+
+const LN_TYPE_LABELS: Record<string, string> = {
+  commitment:   'Commitment',
+  htlc_timeout: 'HTLC Timeout',
+  htlc_success: 'HTLC Success',
+};
+
+function getMaxSeverity(alerts: MonitorEvent['alerts']): AlertSeverity | null {
+  if (alerts.length === 0) return null;
+  if (alerts.some((a) => a.severity === 'critical')) return 'critical';
+  if (alerts.some((a) => a.severity === 'warning')) return 'warning';
+  return 'informational';
+}
+
+function StatusDot({ status }: { status: ConnectionStatus }) {
+  const color = status === 'connected' ? '#22c55e' : status === 'error' ? '#ef4444' : '#374151';
+  const shadow = status === 'connected' ? '0 0 6px #22c55e' : 'none';
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full shrink-0 ${status === 'connected' ? 'animate-pulse' : ''}`}
+      style={{ background: color, boxShadow: shadow }}
+    />
+  );
+}
+
+interface MempoolMonitorProps {
+  onTxClick?: (txid: string) => void;
+}
+
+export function MempoolMonitor({ onTxClick }: MempoolMonitorProps) {
+  const [intervalSecs, setIntervalSecs] = useState('10');
   const [minSeverity, setMinSeverity] = useState<'info' | 'warning' | 'critical'>('info');
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [events, setEvents] = useState<MonitorEventDisplay[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const handleStart = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
+    eventSourceRef.current?.close();
+    const intervalNum = Number.parseInt(intervalSecs, 10) || 10;
+    const es = api.createMonitorStream({ interval: intervalNum, min_severity: minSeverity });
 
-    const intervalNum = parseInt(interval, 10) || 10;
-    const es = api.createMonitorStream({
-      interval: intervalNum,
-      min_severity: minSeverity,
-    });
-
-    es.onopen = () => {
-      setStatus('connected');
-    };
-
+    es.onopen = () => setStatus('connected');
     es.addEventListener('tx', (e: MessageEvent) => {
       try {
         const payload: MonitorEvent = JSON.parse(e.data);
-        const displayEvent: MonitorEventDisplay = {
-          ...payload,
-          timestamp: Date.now(),
-        };
-
-        setEvents((prev) => {
-          const next = [displayEvent, ...prev];
-          return next.slice(0, MAX_EVENTS);
-        });
+        setEvents((prev) => [{ ...payload, receivedAt: Date.now() }, ...prev].slice(0, MAX_EVENTS));
       } catch (err) {
         console.error('Failed to parse SSE event:', err);
       }
     });
-
-    es.onerror = () => {
-      setStatus('error');
-      es.close();
-    };
-
+    es.onerror = () => { setStatus('error'); es.close(); };
     eventSourceRef.current = es;
   };
 
   const handleStop = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
     setStatus('disconnected');
   };
 
-  const handleClear = () => {
-    setEvents([]);
-  };
+  useEffect(() => { return () => { eventSourceRef.current?.close(); }; }, []);
 
-  useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-    };
-  }, []);
-
-  const getMaxSeverity = (alerts: MonitorEvent['alerts']): AlertSeverity | null => {
-    if (alerts.length === 0) return null;
-    if (alerts.some((a) => a.severity === 'critical')) return 'critical';
-    if (alerts.some((a) => a.severity === 'warning')) return 'warning';
-    return 'informational';
-  };
+  const criticalCount = events.filter((e) => getMaxSeverity(e.alerts) === 'critical').length;
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Mempool Monitor</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm text-muted-foreground">Interval (seconds)</label>
-                <Input
-                  data-testid="monitor-interval"
-                  type="number"
-                  placeholder="Interval in seconds"
-                  value={interval}
-                  onChange={(e) => setInterval(e.target.value)}
-                  disabled={status === 'connected'}
-                />
-              </div>
-              <div>
-                <label className="text-sm text-muted-foreground">Min Severity</label>
-                <Select 
-                  value={minSeverity} 
-                  onValueChange={(v) => setMinSeverity(v as typeof minSeverity)}
-                  disabled={status === 'connected'}
-                >
-                  <SelectTrigger data-testid="monitor-min-severity">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="info">Info</SelectItem>
-                    <SelectItem value="warning">Warning</SelectItem>
-                    <SelectItem value="critical">Critical</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <Button
-                data-testid="monitor-start-btn"
-                onClick={handleStart}
-                disabled={status === 'connected'}
-                variant={status === 'connected' ? 'secondary' : 'default'}
+      {/* Controls card */}
+      <div className="rounded border border-border bg-card p-4 space-y-4">
+        <div className="flex items-center gap-3">
+          <StatusDot status={status} />
+          <span
+            data-testid="monitor-status"
+            className="font-mono text-xs capitalize"
+            style={{ color: status === 'connected' ? '#22c55e' : status === 'error' ? '#ef4444' : '#64748b' }}
+          >
+            {status}
+          </span>
+          {events.length > 0 && (
+            <div className="ml-auto flex items-center gap-2">
+              <span
+                data-testid="monitor-event-count"
+                className="font-mono text-[11px] text-muted-foreground"
               >
-                Start Monitoring
-              </Button>
-              <Button
-                data-testid="monitor-stop-btn"
-                onClick={handleStop}
-                disabled={status === 'disconnected'}
-                variant="destructive"
-              >
-                Stop
-              </Button>
-              <Button
-                data-testid="monitor-clear-btn"
-                onClick={handleClear}
-                variant="outline"
-              >
-                Clear
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-4 text-sm">
-              <div>
-                <span className="text-muted-foreground">Status: </span>
-                <span
-                  data-testid="monitor-status"
-                  className={`font-mono ${
-                    status === 'connected' ? 'text-green-600' :
-                    status === 'error' ? 'text-red-600' :
-                    'text-gray-600'
-                  }`}
-                >
-                  {status}
+                {events.length} event{events.length !== 1 ? 's' : ''}
+              </span>
+              {criticalCount > 0 && (
+                <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-sm bg-red-600 text-white">
+                  {criticalCount} critical
                 </span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Events: </span>
-                <span data-testid="monitor-event-count" className="font-mono">
-                  {events.length}
-                </span>
-              </div>
+              )}
             </div>
+          )}
+        </div>
+
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="space-y-1">
+            <label htmlFor="monitor-interval" className="font-mono text-[11px] text-muted-foreground">
+              Interval (seconds)
+            </label>
+            <input
+              id="monitor-interval"
+              data-testid="monitor-interval"
+              type="number"
+              min="5"
+              placeholder="10"
+              value={intervalSecs}
+              onChange={(e) => setIntervalSecs(e.target.value)}
+              disabled={status === 'connected'}
+              className="w-28 bg-background border border-border rounded px-3 py-1.5 text-xs font-mono text-foreground placeholder:text-muted-foreground/40 outline-none focus:border-primary/50 transition-colors disabled:opacity-50"
+            />
           </div>
-        </CardContent>
-      </Card>
+          <div className="space-y-1">
+            <label htmlFor="monitor-min-severity" className="font-mono text-[11px] text-muted-foreground">
+              Min severity
+            </label>
+            <select
+              id="monitor-min-severity"
+              data-testid="monitor-min-severity"
+              value={minSeverity}
+              onChange={(e) => setMinSeverity(e.target.value as typeof minSeverity)}
+              disabled={status === 'connected'}
+              className="w-44 bg-background border border-border rounded px-3 py-1.5 text-xs font-mono text-foreground outline-none focus:border-primary/50 transition-colors disabled:opacity-50 appearance-none"
+            >
+              <option value="info">Info and above</option>
+              <option value="warning">Warning and above</option>
+              <option value="critical">Critical only</option>
+            </select>
+          </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Live Feed</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div data-testid="monitor-feed" className="space-y-2 max-h-[600px] overflow-y-auto">
-            {events.length === 0 ? (
-              <div className="text-sm text-muted-foreground text-center py-8">
-                No events received yet. Click "Start Monitoring" to begin.
-              </div>
-            ) : (
-              events.map((event, idx) => {
-                const maxSeverity = getMaxSeverity(event.alerts);
-                const hasActiveTimelocks = event.timelock.summary.has_active_timelocks;
+          <div className="flex gap-2 pb-0.5">
+            <button
+              data-testid="monitor-start-btn"
+              type="button"
+              onClick={handleStart}
+              disabled={status === 'connected'}
+              className="px-3 py-1.5 rounded font-mono text-xs font-semibold bg-primary text-background hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {status === 'error' ? 'Reconnect' : 'Start'}
+            </button>
+            <button
+              data-testid="monitor-stop-btn"
+              type="button"
+              onClick={handleStop}
+              disabled={status === 'disconnected'}
+              className="px-3 py-1.5 rounded font-mono text-xs border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Stop
+            </button>
+            <button
+              data-testid="monitor-clear-btn"
+              type="button"
+              onClick={() => setEvents([])}
+              disabled={events.length === 0}
+              className="px-3 py-1.5 rounded font-mono text-xs text-muted-foreground/50 hover:text-muted-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
 
-                return (
-                  <div
-                    key={`${event.txid}-${idx}`}
-                    data-testid="monitor-event"
-                    className={`border rounded p-3 ${
-                      maxSeverity === 'critical' ? 'border-red-500 bg-red-50' :
-                      maxSeverity === 'warning' ? 'border-yellow-500 bg-yellow-50' :
-                      event.alerts.length > 0 ? 'border-blue-500 bg-blue-50' :
-                      'border-gray-300 bg-white'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div data-testid="monitor-event-txid" className="font-mono text-sm truncate flex-1">
-                        {event.txid}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {new Date(event.timestamp).toLocaleTimeString()}
-                      </div>
-                    </div>
+        {status === 'error' && (
+          <p className="font-mono text-[11px] text-red-400">
+            Connection lost. Click Reconnect to try again.
+          </p>
+        )}
+      </div>
 
-                    <div className="flex flex-wrap gap-2 text-xs">
+      {/* Live feed */}
+      <div className="rounded border border-border bg-card p-4">
+        <h3 className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground font-semibold mb-3">
+          Live Feed
+        </h3>
+        <div
+          data-testid="monitor-feed"
+          className="space-y-1.5 max-h-[560px] overflow-y-auto"
+        >
+          {events.length === 0 ? (
+            <p className="text-center py-10 font-mono text-xs text-muted-foreground/40">
+              {status === 'connected'
+                ? 'Waiting for transactions…'
+                : 'Start monitoring to receive transactions.'}
+            </p>
+          ) : (
+            events.map((event, idx) => {
+              const maxSev = getMaxSeverity(event.alerts);
+              const hasTimelocks = event.timelock.summary.has_active_timelocks;
+              const rowBg = maxSev ? SEVERITY_ROW[maxSev] : '#111318';
+
+              return (
+                <div
+                  key={`${event.txid}-${idx}`}
+                  data-testid="monitor-event"
+                  className="rounded px-3 py-2 cursor-pointer hover:brightness-125 transition-all"
+                  style={{
+                    background: rowBg,
+                    border: `1px solid ${maxSev ? 'rgba(255,255,255,0.06)' : '#1e2028'}`,
+                  }}
+                  onClick={() => onTxClick?.(event.txid)}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span
+                      data-testid="monitor-event-txid"
+                      className="font-mono text-[11px] text-primary truncate flex-1 hover:underline"
+                    >
+                      {event.txid.slice(0, 16)}…{event.txid.slice(-8)}
+                    </span>
+                    <span className="font-mono text-[10px] text-muted-foreground/50 shrink-0">
+                      {new Date(event.receivedAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+
+                  {(event.lightning.tx_type || hasTimelocks || event.alerts.length > 0) && (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
                       {event.lightning.tx_type && (
                         <span
                           data-testid="monitor-event-ln-type"
-                          className="bg-blue-100 text-blue-800 px-2 py-1 rounded"
+                          className="font-mono text-[10px] px-1.5 py-0.5 rounded-sm bg-yellow-400/10 text-yellow-300 border border-yellow-500/20"
                         >
-                          ⚡ {event.lightning.tx_type}
+                          {LN_TYPE_LABELS[event.lightning.tx_type] ?? event.lightning.tx_type}
                         </span>
                       )}
-
-                      {event.alerts.length > 0 && (
-                        <>
-                          <span
-                            data-testid="monitor-event-alerts-count"
-                            className="bg-gray-100 text-gray-800 px-2 py-1 rounded"
-                          >
-                            {event.alerts.length} alert{event.alerts.length !== 1 ? 's' : ''}
-                          </span>
-                          {maxSeverity && (
-                            <span
-                              data-testid="monitor-event-severity"
-                              className={`px-2 py-1 rounded font-bold ${
-                                maxSeverity === 'critical' ? 'bg-red-200 text-red-900' :
-                                maxSeverity === 'warning' ? 'bg-yellow-200 text-yellow-900' :
-                                'bg-blue-200 text-blue-900'
-                              }`}
-                            >
-                              {maxSeverity.toUpperCase()}
-                            </span>
-                          )}
-                        </>
-                      )}
-
-                      {hasActiveTimelocks && (
+                      {hasTimelocks && (
                         <span
                           data-testid="monitor-event-timelocks"
-                          className="bg-purple-100 text-purple-800 px-2 py-1 rounded"
+                          className="font-mono text-[10px] px-1.5 py-0.5 rounded-sm bg-purple-900/30 text-purple-300 border border-purple-800/30"
                         >
-                          active
+                          active timelocks
+                        </span>
+                      )}
+                      {maxSev && (
+                        <span
+                          data-testid="monitor-event-severity"
+                          className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-sm"
+                          style={{ background: SEVERITY_BADGE_STYLE[maxSev].bg, color: SEVERITY_BADGE_STYLE[maxSev].text }}
+                        >
+                          {maxSev.toUpperCase()}
+                        </span>
+                      )}
+                      {event.alerts.length > 0 && (
+                        <span
+                          data-testid="monitor-event-alerts-count"
+                          className="font-mono text-[10px] text-muted-foreground/60"
+                        >
+                          {event.alerts.length} alert{event.alerts.length !== 1 ? 's' : ''}
                         </span>
                       )}
                     </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </CardContent>
-      </Card>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }
