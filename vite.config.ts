@@ -10,8 +10,9 @@ export default defineConfig(() => ({
     port: 8080,
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'https://cltv-scan.fly.dev',
         changeOrigin: true,
+        secure: true,
       },
     },
   },
